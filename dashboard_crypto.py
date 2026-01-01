@@ -5,92 +5,133 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from ta.momentum import RSIIndicator
-from ta.trend import EMAIndicator
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.linear_model import LinearRegression
-st.set_page_config(page_title="Crypto Dashboard Predictivo", layout="wide")
+from ta.volatility import AverageTrueRange
+from ta.trend import SMAIndicator
 
-CRYPTOS = {
+from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.model_selection import TimeSeriesSplit
+
+# ---------------- CONFIG ----------------
+st.set_page_config(page_title="Crypto Predictive Dashboard", layout="wide")
+
+CRYPTO_TICKERS = {
     "Bitcoin": "BTC-USD",
     "Ethereum": "ETH-USD",
+    "Polkadot": "DOT-USD",
     "BNB": "BNB-USD",
     "Solana": "SOL-USD",
-    "XRP": "XRP-USD",
     "Cardano": "ADA-USD",
-    "Polkadot": "DOT-USD",
+    "XRP": "XRP-USD",
     "Avalanche": "AVAX-USD",
     "Chainlink": "LINK-USD",
     "Polygon": "MATIC-USD"
 }
 
+FORECAST_WEEKS = 1
+BOOTSTRAP_MODELS = 50
+
+# ---------------- DATA ----------------
 @st.cache_data
 def cargar_datos(ticker):
-    df = yf.download(ticker, period="5y", interval="1wk")
+    df = yf.download(ticker, period="5y", interval="1d")
+    df = df[["Close", "Volume"]].dropna()
 
-    # Asegurar que Close es una Serie 1D
-    close = df["Close"].squeeze()
+    df["return_1d"] = df["Close"].pct_change()
+    df["return_7d"] = df["Close"].pct_change(7)
+    df["volatility_7d"] = df["return_1d"].rolling(7).std()
 
-    data = pd.DataFrame({
-        "Close": close
-    })
+    df["RSI"] = RSIIndicator(df["Close"], window=14).rsi()
+    df["SMA_7"] = SMAIndicator(df["Close"], 7).sma_indicator()
+    df["SMA_21"] = SMAIndicator(df["Close"], 21).sma_indicator()
+    df["MA_ratio"] = df["SMA_7"] / df["SMA_21"]
 
-    data["RSI"] = RSIIndicator(data["Close"]).rsi()
-    data["EMA20"] = EMAIndicator(data["Close"], window=20).ema_indicator()
+    df["volume_change"] = df["Volume"].pct_change()
 
-    data.dropna(inplace=True)
-    return data
+    # Target: retorno futuro semanal
+    df["target"] = df["Close"].shift(-7) / df["Close"] - 1
 
+    return df.dropna()
 
-def predecir(df, semanas=12):
-    df = df.copy()
-    df["t"] = np.arange(len(df))
+# ---------------- MODEL ----------------
+def entrenar_y_predecir(df):
+    features = [
+        "return_1d", "return_7d", "volatility_7d",
+        "RSI", "MA_ratio", "volume_change"
+    ]
 
-    X = df[["t"]]
-    y = df["Close"]
+    X = df[features].values
+    y = df["target"].values
 
-    model = LinearRegression()
-    model.fit(X, y)
+    preds = []
 
-    future_t = np.arange(len(df), len(df) + semanas).reshape(-1, 1)
-    preds = model.predict(future_t)
+    for seed in range(BOOTSTRAP_MODELS):
+        model = HistGradientBoostingRegressor(
+            max_depth=5,
+            learning_rate=0.05,
+            max_iter=300,
+            l2_regularization=0.1,
+            random_state=seed
+        )
 
-    return preds
+        model.fit(X[:-7], y[:-7])
+        pred = model.predict(X[-1].reshape(1, -1))[0]
+        preds.append(pred)
 
-# ============================
-# DASHBOARD
-# ============================
+    return np.array(preds)
 
-st.title("📊 Dashboard Predictivo de Criptomonedas")
+# ---------------- UI ----------------
+st.title("📊 Crypto Predictive Dashboard (Modelo Robusto)")
 
-crypto_name = st.selectbox("Selecciona una criptomoneda", list(CRYPTOS.keys()))
-ticker = CRYPTOS[crypto_name]
+crypto = st.selectbox(
+    "Selecciona una criptomoneda",
+    list(CRYPTO_TICKERS.keys())
+)
 
+ticker = CRYPTO_TICKERS[crypto]
 df = cargar_datos(ticker)
-pred = predecir(df, semanas=12)
 
-precio_actual = df["Close"].iloc[-1]
-precio_pred = pred[-1]
-variacion = (precio_pred / precio_actual - 1) * 100
+preds = entrenar_y_predecir(df)
 
-# ALERTAS
-if variacion >= 25:
-    st.error(f"🚀 ALERTA SUBIDA: +{variacion:.2f}% previsto")
-elif variacion <= -5:
-    st.warning(f"⚠️ ALERTA CAÍDA: {variacion:.2f}% previsto")
+mean_pred = preds.mean()
+p5 = np.percentile(preds, 5)
+p95 = np.percentile(preds, 95)
+
+# ---------------- ALERTS ----------------
+if p95 > 0.25:
+    st.success(f"📈 ALERTA SUBIDA FUERTE: posible +{p95*100:.2f}%")
+elif p5 < -0.05:
+    st.warning(f"📉 ALERTA CAÍDA: posible {p5*100:.2f}%")
 else:
-    st.success("🟢 Sin alertas significativas")
+    st.info("🟢 Sin alertas significativas")
 
-# GRAFICA
-fig, ax = plt.subplots(figsize=(10,5))
-ax.plot(df.index, df["Close"], label="Histórico")
-future_dates = pd.date_range(df.index[-1], periods=12, freq="W")
-ax.plot(future_dates, pred, label="Predicción", linestyle="--")
-ax.legend()
-ax.grid()
+# ---------------- CHART ----------------
+st.subheader("Histórico y proyección semanal")
 
-st.pyplot(fig)
+last_price = df["Close"].iloc[-1]
+future_price = last_price * (1 + mean_pred)
 
-# INFO
-st.metric("Precio actual (USD)", f"{precio_actual:.2f}")
-st.metric("Precio previsto 12 semanas", f"{precio_pred:.2f}")
-st.metric("Variación prevista", f"{variacion:.2f}%")
+dates = pd.concat([
+    df.index[-90:],
+    pd.date_range(df.index[-1], periods=2, freq="7D")
+])
+
+prices = list(df["Close"].iloc[-90:]) + [future_price]
+
+plt.figure(figsize=(10, 4))
+plt.plot(dates[:-1], prices[:-1], label="Histórico")
+plt.plot(dates[-2:], prices[-2:], "--", label="Predicción")
+
+plt.legend()
+plt.grid()
+st.pyplot(plt)
+
+# ---------------- METRICS ----------------
+st.subheader("Predicción semanal")
+
+col1, col2, col3 = st.columns(3)
+
+col1.metric("Predicción media", f"{mean_pred*100:.2f}%")
+col2.metric("Escenario pesimista (5%)", f"{p5*100:.2f}%")
+col3.metric("Escenario optimista (95%)", f"{p95*100:.2f}%")
+
+st.caption("Modelo basado en retornos + Gradient Boosting + Bootstrap")
