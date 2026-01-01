@@ -7,9 +7,6 @@ import matplotlib.pyplot as plt
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator
 from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
-
 st.set_page_config(page_title="Crypto Dashboard Predictivo", layout="wide")
 
 CRYPTOS = {
