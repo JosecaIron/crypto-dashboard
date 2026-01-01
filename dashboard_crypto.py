@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.linear_model import LinearRegression
 st.set_page_config(page_title="Crypto Dashboard Predictivo", layout="wide")
 
 CRYPTOS = {
@@ -41,35 +42,17 @@ def cargar_datos(ticker):
 
 
 def predecir(df, semanas=12):
-    scaler = MinMaxScaler()
-    data = scaler.fit_transform(df)
+    df = df.copy()
+    df["t"] = np.arange(len(df))
 
-    X, y = [], []
-    for i in range(8, len(data)):
-        X.append(data[i-8:i])
-        y.append(data[i, 0])
+    X = df[["t"]]
+    y = df["Close"]
 
-    X, y = np.array(X), np.array(y)
+    model = LinearRegression()
+    model.fit(X, y)
 
-    model = Sequential([
-        LSTM(32, input_shape=(X.shape[1], X.shape[2])),
-        Dense(1)
-    ])
-    model.compile(optimizer="adam", loss="mse")
-    model.fit(X, y, epochs=20, batch_size=16, verbose=0)
-
-    last = X[-1]
-    preds = []
-
-    for _ in range(semanas):
-        p = model.predict(last.reshape(1, *last.shape), verbose=0)[0][0]
-        preds.append(p)
-        last = np.vstack([last[1:], np.append(p, last[-1][1:])])
-
-    preds = scaler.inverse_transform(
-        np.hstack([np.array(preds).reshape(-1,1),
-                   np.zeros((semanas, data.shape[1]-1))])
-    )[:,0]
+    future_t = np.arange(len(df), len(df) + semanas).reshape(-1, 1)
+    preds = model.predict(future_t)
 
     return preds
 
