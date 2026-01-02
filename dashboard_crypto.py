@@ -92,8 +92,18 @@ def entrenar_y_predecir(df):
         "volume_change"
     ]
 
-    X = df[features].values
-    y = df["target"].values
+    data = df[features + ["target"]].copy()
+
+    # 🔒 LIMPIEZA DEFINITIVA
+    data = data.replace([np.inf, -np.inf], np.nan)
+    data = data.dropna()
+
+    # Seguridad mínima
+    if len(data) < 100:
+        return np.array([0.0])
+
+    X = data[features].values
+    y = data["target"].values
 
     preds = []
 
@@ -111,7 +121,6 @@ def entrenar_y_predecir(df):
         preds.append(pred)
 
     return np.array(preds)
-
 # --------------------------------------------------
 # UI
 # --------------------------------------------------
