@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from sklearn.ensemble import HistGradientBoostingRegressor
 
 # --------------------------------------------------
-# CONFIGURACIÓN
+# CONFIGURACIÓN GENERAL
 # --------------------------------------------------
 st.set_page_config(
     page_title="Crypto Predictive Dashboard",
@@ -28,15 +28,13 @@ CRYPTO_TICKERS = {
 }
 
 BOOTSTRAP_MODELS = 50
-MIN_ROWS = 120  # mínimo de datos limpios para predecir
+MIN_ROWS = 70  # umbral ajustado (clave para que funcione)
 
 # --------------------------------------------------
-# RSI MANUAL (ROBUSTO)
+# RSI MANUAL (ROBUSTO Y ESTABLE)
 # --------------------------------------------------
 def calcular_rsi(close, window=14):
-    close = close.astype(float)
     delta = close.diff()
-
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
 
@@ -61,11 +59,12 @@ def cargar_datos(ticker):
 
     df = df[["Close", "Volume"]].dropna()
 
-    # Forzar Series 1D reales
+    # Forzar Series 1D
     close = pd.Series(df["Close"].values.flatten(), index=df.index)
     volume = pd.Series(df["Volume"].values.flatten(), index=df.index)
 
     df["Close"] = close
+
     df["return_1d"] = close.pct_change()
     df["return_7d"] = close.pct_change(7)
     df["volatility_7d"] = df["return_1d"].rolling(7).std()
@@ -81,9 +80,10 @@ def cargar_datos(ticker):
     # Target: retorno semanal futuro
     df["target"] = close.shift(-7) / close - 1
 
-    # Limpieza final
+    # Limpieza final y estabilización
     df = df.replace([np.inf, -np.inf], np.nan)
     df = df.dropna()
+    df = df.iloc[30:]  # elimina arranque inestable de indicadores
 
     return df
 
@@ -126,7 +126,7 @@ def entrenar_y_predecir(df):
     return np.array(preds)
 
 # --------------------------------------------------
-# INTERFAZ
+# INTERFAZ STREAMLIT
 # --------------------------------------------------
 st.title("📊 Crypto Predictive Dashboard")
 st.caption("Modelo robusto sin TensorFlow · Producción estable")
@@ -147,7 +147,7 @@ if df.empty or len(df) < MIN_ROWS:
 preds = entrenar_y_predecir(df)
 
 if preds is None:
-    st.error("❌ No se pudo entrenar el modelo con los datos actuales.")
+    st.error("❌ El modelo no pudo entrenarse con los datos actuales.")
     st.stop()
 
 mean_pred = preds.mean()
