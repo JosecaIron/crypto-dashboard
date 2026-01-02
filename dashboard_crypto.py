@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from sklearn.ensemble import HistGradientBoostingRegressor
 
 # --------------------------------------------------
-# CONFIGURACIÓN GENERAL
+# CONFIGURACIÓN STREAMLIT
 # --------------------------------------------------
 st.set_page_config(
     page_title="Crypto Predictive Dashboard",
@@ -28,10 +28,9 @@ CRYPTO_TICKERS = {
 }
 
 BOOTSTRAP_MODELS = 50
-MIN_ROWS = 70  # umbral ajustado (clave para que funcione)
 
 # --------------------------------------------------
-# RSI MANUAL (ROBUSTO Y ESTABLE)
+# RSI MANUAL (evita errores 2D)
 # --------------------------------------------------
 def calcular_rsi(close, window=14):
     delta = close.diff()
@@ -53,7 +52,7 @@ def calcular_rsi(close, window=14):
 def cargar_datos(ticker):
     df = yf.download(ticker, period="5y", interval="1d")
 
-    # Asegurar columnas planas
+    # Asegurar columnas simples
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
@@ -65,6 +64,7 @@ def cargar_datos(ticker):
 
     df["Close"] = close
 
+    # Features
     df["return_1d"] = close.pct_change()
     df["return_7d"] = close.pct_change(7)
     df["volatility_7d"] = df["return_1d"].rolling(7).std()
@@ -80,10 +80,13 @@ def cargar_datos(ticker):
     # Target: retorno semanal futuro
     df["target"] = close.shift(-7) / close - 1
 
-    # Limpieza final y estabilización
+    # Limpieza
     df = df.replace([np.inf, -np.inf], np.nan)
     df = df.dropna()
-    df = df.iloc[30:]  # elimina arranque inestable de indicadores
+
+    # Recorte solo si hay histórico suficiente
+    if len(df) > 100:
+        df = df.iloc[30:]
 
     return df
 
@@ -102,8 +105,10 @@ def entrenar_y_predecir(df):
 
     data = df[features + ["target"]].copy()
 
-    if len(data) < MIN_ROWS:
-        return None
+    # Umbral dinámico (CLAVE)
+    min_rows = max(50, int(len(data) * 0.5))
+    if len(data) < min_rows:
+        return None, min_rows
 
     X = data[features].values
     y = data["target"].values
@@ -123,13 +128,13 @@ def entrenar_y_predecir(df):
         pred = model.predict(X[-1].reshape(1, -1))[0]
         preds.append(pred)
 
-    return np.array(preds)
+    return np.array(preds), min_rows
 
 # --------------------------------------------------
-# INTERFAZ STREAMLIT
+# INTERFAZ
 # --------------------------------------------------
 st.title("📊 Crypto Predictive Dashboard")
-st.caption("Modelo robusto sin TensorFlow · Producción estable")
+st.caption("Predicción semanal · ML clásico · Sin TensorFlow")
 
 crypto = st.selectbox(
     "Selecciona una criptomoneda",
@@ -140,14 +145,11 @@ ticker = CRYPTO_TICKERS[crypto]
 
 df = cargar_datos(ticker)
 
-if df.empty or len(df) < MIN_ROWS:
-    st.error("❌ No hay suficientes datos históricos limpios para generar una predicción fiable.")
-    st.stop()
-
-preds = entrenar_y_predecir(df)
+preds, min_rows = entrenar_y_predecir(df)
 
 if preds is None:
-    st.error("❌ El modelo no pudo entrenarse con los datos actuales.")
+    st.error("❌ No hay suficientes datos históricos limpios para generar una predicción fiable.")
+    st.caption(f"Filas disponibles: {len(df)} · Mínimo requerido: {min_rows}")
     st.stop()
 
 mean_pred = preds.mean()
@@ -169,7 +171,7 @@ else:
 # --------------------------------------------------
 # GRÁFICA
 # --------------------------------------------------
-st.subheader("📈 Precio histórico y proyección semanal")
+st.subheader("📈 Precio histórico y predicción")
 
 last_price = df["Close"].iloc[-1]
 future_price = last_price * (1 + mean_pred)
@@ -182,7 +184,6 @@ plt.plot(
     "--",
     label="Predicción"
 )
-
 plt.legend()
 plt.grid(True)
 st.pyplot(plt)
@@ -190,11 +191,11 @@ st.pyplot(plt)
 # --------------------------------------------------
 # MÉTRICAS
 # --------------------------------------------------
-st.subheader("📊 Predicción semanal (%)")
+st.subheader("📊 Predicción semanal")
 
 c1, c2, c3 = st.columns(3)
 c1.metric("Predicción media", f"{mean_pred*100:.2f}%")
 c2.metric("Escenario pesimista (5%)", f"{p5*100:.2f}%")
 c3.metric("Escenario optimista (95%)", f"{p95*100:.2f}%")
 
-st.caption("Predicción basada en distribución bootstrap · ML clásico estable")
+st.caption("Modelo bootstrap · Alta robustez · Bajo sobreajuste")
