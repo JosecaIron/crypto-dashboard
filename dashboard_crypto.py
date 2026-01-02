@@ -7,9 +7,12 @@ import matplotlib.pyplot as plt
 from sklearn.ensemble import HistGradientBoostingRegressor
 
 # --------------------------------------------------
-# CONFIG
+# CONFIGURACIÓN
 # --------------------------------------------------
-st.set_page_config(page_title="Crypto Predictive Dashboard", layout="wide")
+st.set_page_config(
+    page_title="Crypto Predictive Dashboard",
+    layout="wide"
+)
 
 CRYPTO_TICKERS = {
     "Bitcoin": "BTC-USD",
@@ -25,9 +28,10 @@ CRYPTO_TICKERS = {
 }
 
 BOOTSTRAP_MODELS = 50
+MIN_ROWS = 120  # mínimo de datos limpios para predecir
 
 # --------------------------------------------------
-# RSI MANUAL (ESTABLE)
+# RSI MANUAL (ROBUSTO)
 # --------------------------------------------------
 def calcular_rsi(close, window=14):
     close = close.astype(float)
@@ -45,7 +49,7 @@ def calcular_rsi(close, window=14):
     return rsi
 
 # --------------------------------------------------
-# DATA
+# CARGA Y PREPARACIÓN DE DATOS
 # --------------------------------------------------
 @st.cache_data
 def cargar_datos(ticker):
@@ -61,6 +65,7 @@ def cargar_datos(ticker):
     close = pd.Series(df["Close"].values.flatten(), index=df.index)
     volume = pd.Series(df["Volume"].values.flatten(), index=df.index)
 
+    df["Close"] = close
     df["return_1d"] = close.pct_change()
     df["return_7d"] = close.pct_change(7)
     df["volatility_7d"] = df["return_1d"].rolling(7).std()
@@ -73,14 +78,17 @@ def cargar_datos(ticker):
 
     df["volume_change"] = volume.pct_change()
 
+    # Target: retorno semanal futuro
     df["target"] = close.shift(-7) / close - 1
 
-    df["Close"] = close
+    # Limpieza final
+    df = df.replace([np.inf, -np.inf], np.nan)
+    df = df.dropna()
 
-    return df.dropna()
+    return df
 
 # --------------------------------------------------
-# MODEL
+# MODELO Y PREDICCIÓN
 # --------------------------------------------------
 def entrenar_y_predecir(df):
     features = [
@@ -94,13 +102,8 @@ def entrenar_y_predecir(df):
 
     data = df[features + ["target"]].copy()
 
-    # 🔒 LIMPIEZA DEFINITIVA
-    data = data.replace([np.inf, -np.inf], np.nan)
-    data = data.dropna()
-
-    # Seguridad mínima
-    if len(data) < 100:
-        return np.array([0.0])
+    if len(data) < MIN_ROWS:
+        return None
 
     X = data[features].values
     y = data["target"].values
@@ -121,31 +124,53 @@ def entrenar_y_predecir(df):
         preds.append(pred)
 
     return np.array(preds)
+
 # --------------------------------------------------
-# UI
+# INTERFAZ
 # --------------------------------------------------
 st.title("📊 Crypto Predictive Dashboard")
-st.caption("Modelo robusto sin TensorFlow · RSI manual · Producción estable")
+st.caption("Modelo robusto sin TensorFlow · Producción estable")
 
-crypto = st.selectbox("Criptomoneda", list(CRYPTO_TICKERS.keys()))
+crypto = st.selectbox(
+    "Selecciona una criptomoneda",
+    list(CRYPTO_TICKERS.keys())
+)
+
 ticker = CRYPTO_TICKERS[crypto]
 
 df = cargar_datos(ticker)
+
+if df.empty or len(df) < MIN_ROWS:
+    st.error("❌ No hay suficientes datos históricos limpios para generar una predicción fiable.")
+    st.stop()
+
 preds = entrenar_y_predecir(df)
+
+if preds is None:
+    st.error("❌ No se pudo entrenar el modelo con los datos actuales.")
+    st.stop()
 
 mean_pred = preds.mean()
 p5 = np.percentile(preds, 5)
 p95 = np.percentile(preds, 95)
 
+# --------------------------------------------------
 # ALERTAS
-if p95 > 0.25:
-    st.success(f"📈 ALERTA SUBIDA FUERTE · +{p95*100:.2f}%")
-elif p5 < -0.05:
-    st.warning(f"📉 ALERTA CAÍDA · {p5*100:.2f}%")
-else:
-    st.info("🟢 Sin alertas relevantes")
+# --------------------------------------------------
+st.subheader("🔔 Alertas automáticas")
 
+if p95 > 0.25:
+    st.success(f"📈 ALERTA SUBIDA FUERTE · Escenario optimista: +{p95*100:.2f}%")
+elif p5 < -0.05:
+    st.warning(f"📉 ALERTA CAÍDA · Escenario pesimista: {p5*100:.2f}%")
+else:
+    st.info("🟢 Sin alertas relevantes previstas")
+
+# --------------------------------------------------
 # GRÁFICA
+# --------------------------------------------------
+st.subheader("📈 Precio histórico y proyección semanal")
+
 last_price = df["Close"].iloc[-1]
 future_price = last_price * (1 + mean_pred)
 
@@ -159,11 +184,17 @@ plt.plot(
 )
 
 plt.legend()
-plt.grid()
+plt.grid(True)
 st.pyplot(plt)
 
+# --------------------------------------------------
 # MÉTRICAS
+# --------------------------------------------------
+st.subheader("📊 Predicción semanal (%)")
+
 c1, c2, c3 = st.columns(3)
 c1.metric("Predicción media", f"{mean_pred*100:.2f}%")
-c2.metric("Escenario pesimista", f"{p5*100:.2f}%")
-c3.metric("Escenario optimista", f"{p95*100:.2f}%")
+c2.metric("Escenario pesimista (5%)", f"{p5*100:.2f}%")
+c3.metric("Escenario optimista (95%)", f"{p95*100:.2f}%")
+
+st.caption("Predicción basada en distribución bootstrap · ML clásico estable")
